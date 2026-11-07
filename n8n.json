@@ -1,0 +1,689 @@
+{
+  "name": "Hotel Food Ordering | Room Service + Pickup",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "hotel-food/orders",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        },
+        "webhookId": "7ffe57fc-33b2-5d20-82a1-e699c278d129"
+      },
+      "id": "e66dbd5c-6f83-509a-86d2-9d3242c50541",
+      "name": "01 | New Food Order",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\nconst issues = [];\nconst guestName = typeof body.guestName === 'string' ? body.guestName.trim() : '';\nconst serviceType = typeof body.serviceType === 'string' ? body.serviceType.trim().toLowerCase() : '';\nconst roomNumber = body.roomNumber == null ? '' : String(body.roomNumber).trim();\nconst paymentMethod = String(body.paymentMethod ?? (serviceType === 'room_service' ? 'charge_to_room' : 'pay_at_counter')).trim().toLowerCase();\nconst instructions = typeof body.instructions === 'string' ? body.instructions.trim().slice(0, 200) : '';\nif (guestName.length < 2 || guestName.length > 80) issues.push('guestName must have 2 to 80 characters');\nif (!['room_service','pickup'].includes(serviceType)) issues.push('serviceType must be room_service or pickup');\nif (serviceType === 'room_service' && !/^[0-9]{1,5}[A-Za-z]?$/.test(roomNumber)) issues.push('roomNumber is required for room service (e.g. 204)');\nif ((serviceType === 'room_service' && !['charge_to_room','pay_on_delivery'].includes(paymentMethod)) || (serviceType === 'pickup' && paymentMethod !== 'pay_at_counter')) issues.push('invalid paymentMethod for the selected serviceType');\nconst rows = Array.isArray(body.items) ? body.items : [];\nif (rows.length === 0 || rows.length > 10) issues.push('items must contain 1 to 10 entries');\nconst merged = new Map();\nfor (const row of rows) {\n  const sku = typeof row?.sku === 'string' ? row.sku.trim().toLowerCase() : '';\n  const qty = row?.quantity;\n  if (!/^[a-z][a-z0-9_]{1,39}$/.test(sku) || !Number.isInteger(qty) || qty < 1 || qty > 10) {\n    issues.push('each item needs a valid sku and integer quantity from 1 to 10');\n    continue;\n  }\n  merged.set(sku, (merged.get(sku) ?? 0) + qty);\n}\nconst items = [...merged].map(([sku, quantity]) => ({ sku, quantity }));\nif (items.some(x => x.quantity > 10)) issues.push('maximum 10 units per menu item');\nif (items.reduce((n,x) => n + x.quantity,0) > 20) issues.push('maximum 20 total units per order');\nreturn [{json:{valid:issues.length===0,issues,order:{guestName,serviceType,roomNumber: serviceType === 'room_service' ? roomNumber : null,paymentMethod,instructions,items}}}];"
+      },
+      "id": "637aa125-c824-5c5b-9c7a-6740acf76661",
+      "name": "02 | Validate Order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        215,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "753bdfa8-9b6e-55c5-bf5a-3e8ba9ae94cb",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7f5ea089-f725-53ae-962b-d802fc44acb6",
+      "name": "03 | Valid Request?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        425,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { issues } = $input.first().json;\nreturn [{json:{success:false,error:'INVALID_ORDER',message:'Please correct the order details.',issues}}];"
+      },
+      "id": "995674bd-9011-5f7f-ac59-f423ae23c52d",
+      "name": "04 | Invalid Order",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        655,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "b01fa743-5891-59ff-a3cb-5d59ad17c855",
+      "name": "05 | Return 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        875,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Demo menu. Prices and stock are snapshots, not a live inventory database.\n// Edit this object to customize dishes, availability, or prices.\nconst MENU = {\n  burger:          {name:'Classic Burger',     price:12.50, stock:15,station:'KITCHEN'},\n  pizza:           {name:'Margherita Pizza',   price:16.00, stock:6, station:'KITCHEN'},\n  pasta:           {name:'Creamy Alfredo',     price:14.00, stock:7, station:'KITCHEN'},\n  club_sandwich:   {name:'Club Sandwich',      price:10.00, stock:8, station:'KITCHEN'},\n  caesar_salad:    {name:'Caesar Salad',       price:9.00,  stock:12,station:'KITCHEN'},\n  coffee:          {name:'Fresh Coffee',       price:4.00,  stock:20,station:'BAR'},\n  orange_juice:    {name:'Fresh Orange Juice', price:5.00,  stock:0, station:'BAR'}\n};\nconst {order} = $input.first().json;\nconst issues = [];\nconst items = order.items.map(({sku,quantity}) => {\n  const product = MENU[sku];\n  if (!product) { issues.push({sku,reason:'Item not found on menu'}); return {sku,quantity}; }\n  if (quantity > product.stock) issues.push({sku,reason:'Not enough stock',requested:quantity,available:product.stock});\n  return {sku,name:product.name,quantity,unitPrice:product.price,station:product.station,lineTotal:Number((product.price * quantity).toFixed(2))};\n});\nreturn [{json:{available:issues.length===0,order:{...order,items},issues}}];"
+      },
+      "id": "37875a4f-dd43-538f-9cf3-846f2c9bab4a",
+      "name": "06 | Check Menu & Stock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c69a49a9-13ed-53dc-93c8-06c899fd1118",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9b827479-b040-5f41-b396-cc4d3d0248d7",
+      "name": "07 | Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        875,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { issues } = $input.first().json;\nreturn [{json:{success:false,error:'MENU_UNAVAILABLE',message:'Some menu items are unavailable.',items:issues}}];"
+      },
+      "id": "01b202a1-b0fb-536d-8acd-bac9d3ea9209",
+      "name": "08 | Unavailable Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 409
+        }
+      },
+      "id": "0fd79290-6a1c-5c6f-a479-f9231a43e104",
+      "name": "09 | Return 409",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1315,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const {order} = $input.first().json;\nconst round2 = x => Math.round((x + Number.EPSILON)*100)/100;\nconst subtotal = round2(order.items.reduce((sum,item) => sum + item.lineTotal,0));\nconst serviceFee = round2(subtotal * 0.10);  // Demo service fee: 10%\nconst deliveryFee = order.serviceType === 'room_service' ? 4 : 0;\nconst total = round2(subtotal + serviceFee + deliveryFee);\nconst isPriority = total >= 75 || order.items.reduce((n,item) => n + item.quantity,0) >= 6;\nconst orderId = 'HTL-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();\nreturn [{json:{...$input.first().json,orderId,createdAt:new Date().toISOString(),currency:'USD',bill:{subtotal,serviceFee,deliveryFee,total},isPriority}}];"
+      },
+      "id": "f6fa99fc-b7d4-59db-a89e-f315c3c64fdf",
+      "name": "10 | Calculate Bill",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "renameOutput": true,
+              "outputKey": "Room Service",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "aefd440d-9aa7-5a03-b8f0-f35cdfc54663",
+                    "leftValue": "={{ $json.order.serviceType }}",
+                    "rightValue": "room_service",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "renameOutput": true,
+              "outputKey": "Restaurant Pickup",
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "78bb3547-266d-53e5-89fd-767dac0a319d",
+                    "leftValue": "={{ $json.order.serviceType }}",
+                    "rightValue": "pickup",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      },
+      "id": "9c020992-e99c-5a01-96e7-d57e8ff72023",
+      "name": "11 | Service Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1315,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1d0a89ea-4964-59b5-88ef-f7898a71fed7",
+              "name": "destination",
+              "value": "={{ \"Room \" + $json.order.roomNumber }}",
+              "type": "string"
+            },
+            {
+              "id": "afc8c9a9-e33a-56fa-a4cb-ed9f6fc2de85",
+              "name": "fulfillment",
+              "value": "ROOM_DELIVERY",
+              "type": "string"
+            },
+            {
+              "id": "921f9348-f120-5ac4-b1b4-b2db737fc4c3",
+              "name": "etaMinutes",
+              "value": 30,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "df727bae-7c8c-5bac-a79b-75fabeeb96c4",
+      "name": "12 | Room Delivery",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1515,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cd234b81-5c8c-5e4a-9f01-3eb679dd5852",
+              "name": "destination",
+              "value": "Restaurant pickup counter",
+              "type": "string"
+            },
+            {
+              "id": "40e12856-7cf7-52ed-8ee6-cbdd63ef323d",
+              "name": "fulfillment",
+              "value": "PICKUP_COUNTER",
+              "type": "string"
+            },
+            {
+              "id": "57f9b003-25f8-578f-a576-69ed743ec6d2",
+              "name": "etaMinutes",
+              "value": 20,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "3ea41b0b-c9f6-52d7-a3e7-8f709f0e3497",
+      "name": "13 | Restaurant Pickup",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1515,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const data = $input.first().json;\nconst kitchen = data.order.items.filter(x=>x.station==='KITCHEN').map(({name,quantity})=>({name,quantity}));\nconst bar = data.order.items.filter(x=>x.station==='BAR').map(({name,quantity})=>({name,quantity}));\nreturn [{json:{...data,kitchenTicket:{orderId:data.orderId,guestName:data.order.guestName,destination:data.destination,fulfillment:data.fulfillment,paymentMethod:data.order.paymentMethod,instructions:data.order.instructions,kitchen,bar,status:'PREP_PENDING'}}}];"
+      },
+      "id": "351868a3-22cc-5191-9cb6-d71c01a75295",
+      "name": "14 | Kitchen Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1730,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "51f0e592-7d50-59df-a1f9-5c9b46de1df8",
+              "leftValue": "={{ $json.isPriority }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "44cbcdea-082f-5915-8678-e66bdd725ad9",
+      "name": "15 | Priority Order?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1935,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7743d0a9-e60f-5afe-bd46-d4c9e47c41a7",
+              "name": "priority",
+              "value": "HIGH",
+              "type": "string"
+            },
+            {
+              "id": "e3608793-4587-5542-a535-a0ab428e4001",
+              "name": "etaMinutes",
+              "value": 15,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "34b49522-c040-5532-82a6-f3519435f873",
+      "name": "16 | Priority Queue",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2135,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "c8c50100-4b69-5f35-bd69-afff13b91926",
+              "name": "priority",
+              "value": "NORMAL",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "fde17541-4794-5dae-8115-1199ff821444",
+      "name": "17 | Standard Queue",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2135,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const d = $input.first().json;\nreturn [{json:{success:true,status:'ACCEPTED_DEMO',orderId:d.orderId,createdAt:d.createdAt,guestName:d.order.guestName,serviceType:d.order.serviceType,destination:d.destination,paymentMethod:d.order.paymentMethod,priority:d.priority,etaMinutes:d.etaMinutes,currency:d.currency,items:d.order.items.map(({sku,name,quantity,unitPrice,lineTotal})=>({sku,name,quantity,unitPrice,lineTotal})),bill:d.bill,kitchenTicket:{...d.kitchenTicket,priority:d.priority},note:'Demo only: no payment was charged, inventory was not reserved, and the kitchen was not notified.'}}];"
+      },
+      "id": "e4beba70-81b9-5515-9add-d72884f40df0",
+      "name": "18 | Order Confirmation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2345,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "id": "69697ad7-f0f2-5848-bed5-d804d747f978",
+      "name": "19 | Return 201",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2560,
+        20
+      ]
+    }
+  ],
+  "connections": {
+    "01 | New Food Order": {
+      "main": [
+        [
+          {
+            "node": "02 | Validate Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 | Validate Order": {
+      "main": [
+        [
+          {
+            "node": "03 | Valid Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 | Valid Request?": {
+      "main": [
+        [
+          {
+            "node": "06 | Check Menu & Stock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "04 | Invalid Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 | Invalid Order": {
+      "main": [
+        [
+          {
+            "node": "05 | Return 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 | Check Menu & Stock": {
+      "main": [
+        [
+          {
+            "node": "07 | Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 | Available?": {
+      "main": [
+        [
+          {
+            "node": "10 | Calculate Bill",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "08 | Unavailable Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 | Unavailable Items": {
+      "main": [
+        [
+          {
+            "node": "09 | Return 409",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 | Calculate Bill": {
+      "main": [
+        [
+          {
+            "node": "11 | Service Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11 | Service Type": {
+      "main": [
+        [
+          {
+            "node": "12 | Room Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "13 | Restaurant Pickup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12 | Room Delivery": {
+      "main": [
+        [
+          {
+            "node": "14 | Kitchen Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13 | Restaurant Pickup": {
+      "main": [
+        [
+          {
+            "node": "14 | Kitchen Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "14 | Kitchen Ticket": {
+      "main": [
+        [
+          {
+            "node": "15 | Priority Order?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "15 | Priority Order?": {
+      "main": [
+        [
+          {
+            "node": "16 | Priority Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "17 | Standard Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "16 | Priority Queue": {
+      "main": [
+        [
+          {
+            "node": "18 | Order Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "17 | Standard Queue": {
+      "main": [
+        [
+          {
+            "node": "18 | Order Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "18 | Order Confirmation": {
+      "main": [
+        [
+          {
+            "node": "19 | Return 201",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "tags": []
+}
