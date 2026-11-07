@@ -24,3 +24,4 @@ An AI-powered hotel food ordering and room service automation system built with 
 
 ## Workflow Overview
 
+<img width="1456" height="902" alt="Screenshot 2026-11-02 at 5 58 50 in the afternoon" src="https://github.com/user-attachments/assets/226881b7-66fb-4d54-ba37-32ea86960425" />
